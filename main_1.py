@@ -22,7 +22,8 @@ def int_to_16bit_binary(value: int) -> str:
 
 
 # ===================== 2. 128个IO变量命名（对照你的PLC变量表修改这里！） =====================
-IO_VAR_NAMES = [
+# 【注意】原始128位数据中包含备用点位，下面是完整映射，但备用点位会被过滤掉
+IO_VAR_NAMES_RAW = [
 
     # VALUE1 (DB0.7~0.0 + DB1.7~1.0) 16位
     "8层上行呼梯按钮", "7层上行呼梯按钮", "6层上行呼梯按钮", "5层上行呼梯按钮",
@@ -60,18 +61,24 @@ IO_VAR_NAMES = [
     "3号梯轿内关门按钮", "3号梯轿内开门按钮", "3号梯轿内选层按钮10", "3号梯轿内选层按钮9",
     "3号梯轿内选层按钮8", "3号梯轿内选层按钮7", "3号梯轿内选层按钮6", "3号梯轿内选层按钮5",
 
-    # ==================== VALUE7 (DBX12.7~12.0 + DBX13.7~13.0) 16位（你指定） ====================
+    # ==================== VALUE7 (DBX12.7~12.0 + DBX13.7~13.0) 16位 ====================
     "3号梯5楼层门锁信号", "3号梯4楼层门锁信号", "3号梯3楼层门锁信号", "3号梯2楼层门锁信号",
     "3号梯1楼层门锁信号", "3号梯轿厢门锁信号", "3号梯检修信号", "3号梯光幕信号",
     "3号梯上平层信号", "3号梯关门到位", "3号梯开门到位", "3号梯10楼层门锁信号",
     "3号梯9楼层门锁信号", "3号梯8楼层门锁信号", "3号梯7楼层门锁信号", "3号梯6楼层门锁信号",
 
-    # ==================== VALUE8 (DBX14.7~14.0 + DBX15.7~15.0) 16位（你指定） ====================
+    # ==================== VALUE8 (DBX14.7~14.0 + DBX15.7~15.0) 16位 ====================
     "备用点位1", "备用点位2","自动运行信号","3号梯下端站2限位",
     "3号梯下端站1限位", "3号梯上端站2限位", "3号梯上端站1限位", "3号梯下平层信号",
     "备用点位3", "备用点位4", "备用点位5", "备用点位6",
     "备用点位7", "备用点位8", "备用点位9", "备用点位10"
 ]
+
+# ===================== 过滤备用点位：生成有效IO变量名列表和索引 =====================
+# 有效索引：记录原始128位中哪些位置是有效IO（非备用点位）
+VALID_IO_INDICES = [i for i, name in enumerate(IO_VAR_NAMES_RAW) if not name.startswith("备用点位")]
+# 有效IO变量名列表（用于CSV表头）
+IO_VAR_NAMES = [IO_VAR_NAMES_RAW[i] for i in VALID_IO_INDICES]
 
 
 # ===================== 3. 电梯运行模式 =====================
@@ -120,7 +127,7 @@ class DataLogger:
         self.csv_file.flush()
 
         print(f"采集启动 | 5秒时序分析 | 智能模式判断")
-        print(f"CSV输出格式: {len(self.headers)}列 = 1(时间戳)+128(BOOL)+3(UINT)+1(模式)")
+        print(f"CSV输出格式: {len(self.headers)}列 = 1(时间戳)+{len(IO_VAR_NAMES)}(BOOL有效IO)+3(UINT)+1(模式) | 已过滤10个备用点位")
         self.running = True
         self._run_loop()
 
@@ -132,18 +139,18 @@ class DataLogger:
         self.client.disconnect()
         print("断开连接")
 
-    # ===================== 【核心】解析8个VALUE → 128个命名布尔变量(0/1) =====================
+    # ===================== 【核心】解析8个VALUE → 有效IO布尔变量(0/1)，过滤备用点位 =====================
     def parse_128_bits(self, value1_to_8):
         binary_str = ""
         for val in value1_to_8:
             binary_str += int_to_16bit_binary(val)
-        # 转为列表：[变量名, 0/1值]，顺序与IO_VAR_NAMES一致
+        # 【关键修改】只提取有效索引位置的布尔值，过滤掉备用点位
         bool_values = []
         io_states = {}
-        for i in range(128):
+        for idx, i in enumerate(VALID_IO_INDICES):  # 同时获取有效索引的序号和原始位置
             bit_value = 1 if binary_str[i] == '1' else 0
             bool_values.append(bit_value)
-            io_states[IO_VAR_NAMES[i]] = (binary_str[i] == '1')
+            io_states[IO_VAR_NAMES[idx]] = (binary_str[i] == '1')  # 使用idx索引IO_VAR_NAMES
         return bool_values, io_states
 
     # ===================== 【核心】基于5秒数据 → 判断电梯模式 =====================
@@ -218,8 +225,10 @@ class DataLogger:
 
     def _print_row(self, row):
         # 控制台只打印关键信息，避免刷屏
+        # 【修改】BOOL值数量现在是len(IO_VAR_NAMES)个，不再是固定的128个
+        bool_count = len(IO_VAR_NAMES)
         print(
-            f"{row[0]} | 模式: {row[-1]} | BOOL信号: {sum(row[1:129])}个激活 | VALUE9: {row[129]}, VALUE10: {row[130]}, VALUE11: {row[131]}")
+            f"{row[0]} | 模式: {row[-1]} | BOOL信号: {sum(row[1:1+bool_count])}个激活 | VALUE9: {row[1+bool_count]}, VALUE10: {row[2+bool_count]}, VALUE11: {row[3+bool_count]}")
 
     # ===================== 数据读取+解析主函数 =====================
     def _read_all_registers_batch(self):
@@ -229,7 +238,7 @@ class DataLogger:
         reg_data = self.client.read_holding_registers(self.reg_start, self.reg_count)
         if not reg_data:
             # 数据读取失败时填充默认值
-            bool_defaults = [0] * 128
+            bool_defaults = [0] * len(IO_VAR_NAMES)  # 【修改】使用有效IO数量，不再是128
             uint_defaults = [""] * 3
             return row + bool_defaults + uint_defaults + ["未知"]
 
@@ -256,8 +265,8 @@ class DataLogger:
         self.history_cache.append(io_states)
         # 判断模式
         mode = self.judge_mode()
-        # 【关键修改】组装CSV行：时间戳 + 128个BOOL + 3个UINT + 模式
-        row.extend(bool_values)  # 128个BOOL值（0/1）
+        # 【关键修改】组装CSV行：时间戳 + 有效BOOL值(已过滤备用点位) + 3个UINT + 模式
+        row.extend(bool_values)  # 有效BOOL值（0/1），数量为len(IO_VAR_NAMES)
         row.extend(value9_to_11)  # 3个UINT值（VALUE9~11）
         row.append(mode)  # 电梯运行模式
         return row
