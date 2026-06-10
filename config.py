@@ -52,9 +52,9 @@ REGISTER_TYPE_MAP = {
     5: ("uint16", "VALUE6"),
     6: ("uint16", "VALUE7"),
     7: ("uint16", "VALUE8"),
-    8: ("uint16", "VALUE9"),
-    9: ("uint16", "VALUE10"),
-    10: ("uint16", "VALUE11"),
+   # 8: ("uint16", "VALUE9"),
+   # 9: ("uint16", "VALUE10"),
+   # 10: ("uint16", "VALUE11"),
 }
 
 
